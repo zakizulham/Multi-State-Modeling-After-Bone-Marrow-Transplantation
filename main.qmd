@@ -1,0 +1,309 @@
+---
+title: "Continuous-Time Multi-State Markov Chain Analysis on Bone Marrow Transplantation Data"
+subtitle: "A First-Order Time-Homogeneous Stochastic Approximation"
+author: "Group Analysis - Department of Mathematics, Universitas Indonesia"
+date: "2026-06-12"
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+## 1. Introduction & Methodological Framework
+
+This study implements a Continuous-Time Markov Chain (CTMC) framework to model the longitudinal clinical pathways of patients following allogeneic bone marrow transplantation (BMT). Using the historical `ebmt4` registry from the `mstate` package, we construct a 6-state multi-state topology to map patient trajectories across transient phases and competing absorbing terminal endpoints.
+
+### The Time-Homogeneity Approximation
+A critical methodological assumption of this model is **time-homogeneity**. In real-world clinical settings, biological hazards are inherently non-homogeneous; risk profiles typically peak intensely during the acute post-graft phase and stabilize over extended timelines. However, by enforcing a time-homogeneous constraint where transition intensities $\mathbf{Q}$ remain constant ($q_{ij}(t) = q_{ij}$), this project establishes a foundational **first-order mathematical approximation**. This simplification allows us to resolve the system analytically using the Chapman-Kolmogorov equations, providing explicit baseline metrics for expected state sojourn times and long-run asymptotic absorption allocations.
+
+---
+
+## 2. Environment Setup & Dependencies
+
+We load the required computational packages: `mstate` for multi-state data restructuring, `tidyverse` for data engineering and visualization pipeline, and `Matrix` for executing high-performance matrix exponential computations ($\exp(\mathbf{Q}t)$).
+
+```{r setup}
+#| label: setup
+#| message: false
+
+library(mstate)
+library(tidyverse)
+library(Matrix)
+
+# Ensure output directory for assets exists
+dir.create("figures", showWarnings = FALSE)
+
+# Load dataset
+data("ebmt4")
+raw_data <- ebmt4
+```
+
+---
+
+## 3. Multi-State Transition Architecture
+
+The state space $\mathcal{S} = \{1, 2, 3, 4, 5, 6\}$ maps the clinical progression topology. Transient states record baseline transplantation, isolated recovery, adverse complications, and compound complex medical histories. Relapse and Death operate as terminal absorbing states due to tracking boundaries in the registry data.
+
+```{r topology}
+#| label: transition-matrix
+
+# Designing the official 6-state multi-state structure:
+# State 1: Transplant (Tx)      -> Transitions to Rec(2), AE(3), Rel(5), Death(6)
+# State 2: Recovery (Rec)       -> Transitions to Rec+AE(4), Rel(5), Death(6)
+# State 3: Adverse Event (AE)   -> Transitions to Rec+AE(4), Rel(5), Death(6)
+# State 4: Rec+AE               -> Transitions to Rel(5) or Death(6)
+# State 5: Relapse (Rel)        -> Absorbing State (Terminal)
+# State 6: Death (Absorbing)    -> Terminal State
+
+t_mat <- transMat(
+  x = list(
+    c(2, 3, 5, 6), 
+    c(4, 5, 6),    
+    c(4, 5, 6),    
+    c(5, 6),       
+    c(),           
+    c()            
+  ),
+  names = c("Tx", "Rec", "AE", "Rec+AE", "Rel", "Death")
+)
+
+cat("Transition Architecture Matrix Layout:\n")
+print(t_mat)
+```
+
+---
+
+## 4. Long-Format Data Restructuring
+
+Using the `msprep` engine, the wide-format patient data is expanded into a long-format structural layout. This conversion computes the exact transition-specific time-at-risk (exposure) and event indicators for each valid pathway in the network.
+
+```{r data-preparation}
+#| label: data-prep
+
+ebmt_long <- msprep(
+  time = c(NA, "rec", "ae", "recae", "rel", "srv"),
+  status = c(NA, "rec.s", "ae.s", "recae.s", "rel.s", "srv.s"),
+  data = ebmt4,
+  trans = t_mat,
+  keep = c("agecl", "match")
+) |>
+  as_tibble()
+
+cat("Preview of Long-Format Multi-State Data:\n")
+print(head(ebmt_long, 5))
+```
+
+---
+
+## 5. Infinitesimal Generator Matrix ($\mathbf{Q}$) Estimation
+
+Under the time-homogeneous assumption, the transition intensities $q_{ij}$ are estimated via parametric Maximum Likelihood Estimation (MLE). The off-diagonal intensities are defined as the ratio of total transitions to total exposure time: 
+$$\hat{q}_{ij} = \frac{n_{ij}}{\int Y_i(t)dt}$$
+The diagonal elements are defined structurally to satisfy the conservation of total probability mass: $q_{ii} = -\sum_{j \neq i} q_{ij}$.
+
+```{r q-matrix-estimation}
+#| label: q-matrix
+
+# Compute MLE intensity parameters
+q_estimates <- ebmt_long |>
+  group_by(from, to) |>
+  summarise(
+    total_events = sum(status),
+    total_exposure = sum(time),
+    q_intensity = total_events / total_exposure,
+    .groups = "drop"
+  )
+
+# Initialize blank 6x6 generator matrix
+Q_matrix <- matrix(
+  0,
+  nrow = 6,
+  ncol = 6,
+  dimnames = list(
+    c("Tx", "Rec", "AE", "Rec+AE", "Rel", "Death"),
+    c("Tx", "Rec", "AE", "Rec+AE", "Rel", "Death")
+  )
+)
+
+# Populate off-diagonal intensities
+for (i in 1:nrow(q_estimates)) {
+  Q_matrix[q_estimates$from[i], q_estimates$to[i]] <- q_estimates$q_intensity[i]
+}
+
+# Compute diagonal elements
+diag(Q_matrix) <- -rowSums(Q_matrix)
+
+cat("Estimated Infinitesimal Generator Matrix (Q):\n")
+print(Q_matrix)
+```
+
+---
+
+## 6. Expected State Sojourn Times Analysis
+
+The continuous holding time (sojourn duration) in any transient state $i$ under a time-homogeneous Markov framework follows an Exponential distribution governed by parameter $v_i = -q_{ii}$. The expected holding duration is resolved as:
+$$\mathbb{E}[S_i] = \frac{1}{-q_{ii}}$$
+
+```{r sojourn-analysis}
+#| label: sojourn-time
+
+rates_leaving <- -diag(Q_matrix)
+expected_sojourn <- 1 / rates_leaving
+
+sojourn_analysis <- tibble(
+  State = names(rates_leaving),
+  Leaving_Rate = rates_leaving,
+  Expected_Sojourn_Days = expected_sojourn
+) |>
+  mutate(
+    Interpretation = if_else(
+      is.infinite(Expected_Sojourn_Days),
+      "Absorbing State (Permanent Stay)",
+      paste("Spends an average of", round(Expected_Sojourn_Days, 2), "days before transitioning")
+    )
+  )
+
+cat("Expected Sojourn Analysis Output:\n")
+print(sojourn_analysis)
+```
+
+---
+
+## 7. Chapman-Kolmogorov Milestone Projections
+
+Transition probability paths over explicit intervals are computed through the matrix exponential operator: $\mathbf{P}(t) = \exp(\mathbf{Q}t)$. We evaluate the system at short-term, medium-term, and asymptotic boundaries.
+
+```{r landmarks}
+#| label: probability-milestones
+
+# Milestone 1: 100 Days Post-Transplantation
+P_matrix_100d <- as.matrix(expm(Q_matrix * 100))
+dimnames(P_matrix_100d) <- dimnames(Q_matrix)
+cat("Transition Probability Matrix P(100 Days):\n")
+print(round(P_matrix_100d, 4))
+
+# Milestone 2: 365 Days Post-Transplantation (1 Year)
+P_matrix_1year <- as.matrix(expm(Q_matrix * 365))
+dimnames(P_matrix_1year) <- dimnames(Q_matrix)
+cat("\nTransition Probability Matrix P(365 Days - 1 Year):\n")
+print(round(P_matrix_1year, 4))
+
+# Asymptotic Horizon (t -> Infinity absorption probability)
+P_matrix_infinity <- as.matrix(expm(Q_matrix * 10000))
+dimnames(P_matrix_infinity) <- dimnames(Q_matrix)
+cat("\nAsymptotic Absorption Matrix P(t -> Infinity):\n")
+print(round(P_matrix_infinity, 5))
+```
+
+---
+
+## 8. Continuous Trajectory Visualizations
+
+We track the evolving continuous trajectory curves across a 2,000-day projection horizon for a baseline patient originating from the initial post-transplantation pool (`Tx`).
+
+```{r trajectories}
+#| label: generate-curves
+
+time_horizon <- seq(0, 2000, by = 10)
+
+patient_projection <- tibble(t = time_horizon) |>
+  mutate(
+    P_Tx = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "Tx"]),
+    P_Rec = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "Rec"]),
+    P_AE = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "AE"]),
+    P_Rec_AE = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "Rec+AE"]),
+    P_Relapse = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "Rel"]),
+    P_Death = map_dbl(t, \(day) expm(Q_matrix * day)["Tx", "Death"])
+  ) |>
+  pivot_longer(
+    cols = starts_with("P_"),
+    names_to = "Status",
+    values_to = "Probability"
+  ) |>
+  mutate(
+    Status = recode_values(
+      Status,
+      "P_Tx" ~ "Initial State (Tx)",
+      "P_Rec" ~ "Recovery Phase (Rec)",
+      "P_AE" ~ "Adverse Event (AE)",
+      "P_Rec_AE" ~ "Combined Phase (Rec+AE)",
+      "P_Relapse" ~ "Relapse (Rel)",
+      "P_Death" ~ "Deceased (Death)"
+    ),
+    Status = factor(
+      Status,
+      levels = c(
+        "Initial State (Tx)",
+        "Recovery Phase (Rec)",
+        "Adverse Event (AE)",
+        "Combined Phase (Rec+AE)",
+        "Relapse (Rel)",
+        "Deceased (Death)"
+      )
+    )
+  )
+```
+
+The graphical trajectories are plotted below using customized hex codes and professional typography mapping options:
+
+```{r plot-generation}
+#| label: plotting-curves
+#| fig-width: 8
+#| fig-height: 5.5
+
+ctmc_plot <- ggplot(patient_projection, aes(x = t, y = Probability, color = Status)) +
+  geom_line(linewidth = 1.2, alpha = 0.85) +
+  scale_color_manual(
+    values = c(
+      "Initial State (Tx)" = "#D4AF37",
+      "Recovery Phase (Rec)" = "#2E7D32",
+      "Adverse Event (AE)" = "#E65100",
+      "Combined Phase (Rec+AE)" = "#303F9F",
+      "Relapse (Rel)" = "#C62828",
+      "Deceased (Death)" = "#212121"
+    )
+  ) +
+  theme_minimal(base_size = 11, base_family = "sans") +
+  labs(
+    title = "Continuous-Time Markov Chain Dynamics in Bone Marrow Transplantation",
+    subtitle = "Long-Term State Probability Trajectories Calibrated from EBMT Patient Data",
+    x = "Days Post-Transplantation",
+    y = "State Occupancy Probability P(t)",
+    color = "Patient Status"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 12, margin = margin(b = 6)),
+    plot.subtitle = element_text(size = 9.5, color = "gray30", margin = margin(b = 15)),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold", size = 9.5),
+    legend.text = element_text(size = 9),
+    axis.title = element_text(face = "bold", size = 10.5),
+    panel.grid.minor = element_blank(),
+    panel.grid.major = element_line(color = "gray92")
+  ) +
+  guides(color = guide_legend(nrow = 2, byrow = TRUE))
+
+print(ctmc_plot)
+
+# Export asset for LaTeX integration
+ggsave(
+  filename = "figures/ctmc_trajectory.png",
+  plot = ctmc_plot,
+  width = 7,
+  height = 5,
+  dpi = 300
+)
+```
+
+---
+
+## 9. Conclusion
+
+The pipeline successfully transforms multi-state registration assets into a mathematical generator matrix. By enforcing the time-homogeneous framework as an operational approximation, we successfully trace short-term evolutions and terminal competing absorption fates. This multi-state approach provides higher prognostic differentiation than standard univariate Kaplan-Meier curves by capturing state occupancy variations dynamically without informational loss.
