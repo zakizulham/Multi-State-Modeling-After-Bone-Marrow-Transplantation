@@ -53,7 +53,7 @@ GitHub Repository: [https://github.com/zakizulham/Multi-State-Modeling-After-Bon
 
 This research project was conducted as part of the foundational Stochastic Models curriculum. We thank all group members for their equal contributions to data validation, mathematical proofs, and computational implementation:
 
-* **[Muhammad Zaki Zulhamlizar]** ([zakizulham205@gmail.com]) - Core Stochastic Modeling & Computation Pipeline.
+* **[Muhammad Zaki Zulhamlizar](zakizulham205@gmail.com)** - Core Stochastic Modeling & Computation Pipeline.
 * **[Muhammad Salman]** - Data Validation & Verification.
 * **[Andhika Dzaky Karafathi]** - LaTeX Document Engineering & Formatting.
 * **[Louisa Devina]** - Clinical Interpretation & Asset Review.
