@@ -2,7 +2,7 @@
 
 This repository contains the complete, reproducible computational pipeline and LaTeX source documents for a 6-state Continuous-Time Markov Chain (CTMC) analysis on the `ebmt4` bone marrow transplantation dataset. 
 
-A key characteristic of this implementation is its methodological approach to biological hazards: while clinical post-transplantation risks are inherently non-homogeneous (time-dependent and fluctuating over time), this project applies a strict time-homogeneous constraint. By treating transition intensities as constant, the model serves as a foundational first-order mathematical approximation. This constraint simplifies the underlying continuous stochastic process, enabling the direct calculation of exact baseline metrics, including expected state sojourn times and asymptotic terminal absorption allocations ($\mathbf{P}(\infty)$).
+A key characteristic of this implementation is its methodological approach to biological hazards: while clinical post-transplantation risks are inherently non-homogeneous (time-dependent and fluctuating over time), this project applies a strict time-homogeneous constraint. By treating transition intensities as constant, the model serves as a foundational first-order mathematical approximation. This constraint simplifies the underlying continuous stochastic process, enabling the direct calculation of exact baseline metrics, including expected state sojourn times and asymptotic terminal absorption allocations ($`\mathbf{P}(\infty)`$).
 
 ## 📂 Repository Structure
 
